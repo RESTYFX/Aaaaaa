@@ -1,0 +1,6 @@
+{
+  "name": "Deriv Trading App",
+  "description": "A professional Deriv trading application featuring lightweight candlestick charts fetching live Deriv market data, volatility market selection, PAT API authentication, real-time balance tracking, and 1-minute Rise/Fall trade execution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
