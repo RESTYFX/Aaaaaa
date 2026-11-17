@@ -18,6 +18,7 @@ import {
   ShieldAlert,
   Calendar,
   Timer,
+  Coins,
 } from 'lucide-react';
 
 interface TradeHistoryTableProps {
@@ -94,6 +95,7 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = React.memo(({
     let lost = 0;
     let open = 0;
     let totalPnl = 0;
+    let maxStake = 0;
 
     for (let i = 0; i < boundedTrades.length; i++) {
       const t = boundedTrades[i];
@@ -101,6 +103,10 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = React.memo(({
         open++;
       }
       if (!isVirtualRecord(t, isVirtualSystemEnabled)) {
+        const stakeVal = Number(t.stake) || 0;
+        if (stakeVal > maxStake) {
+          maxStake = stakeVal;
+        }
         if (t.status === 'won') {
           won++;
           totalPnl += getTradeProfit(t);
@@ -114,6 +120,7 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = React.memo(({
     const winRate = settled > 0 ? ((won / settled) * 100).toFixed(1) : '0.0';
 
     // Calculate the highest maximum consecutive losses recorded so far in history (REAL trades only, excluding virtual trades)
+    // and the total dollar amount lost during that highest consecutive loss streak
     const realSettledList: TradeRecord[] = [];
     for (let i = 0; i < boundedTrades.length; i++) {
       const t = boundedTrades[i];
@@ -123,23 +130,36 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = React.memo(({
     }
 
     // Sort real settled trades chronologically from earliest to latest
+    const normalizeEpochMs = (val?: number): number => {
+      if (!val || !Number.isFinite(val)) return 0;
+      return val > 0 && val < 1e11 ? val * 1000 : val;
+    };
     realSettledList.sort((a, b) => {
-      const timeA = a.sellTime || a.purchaseTime || 0;
-      const timeB = b.sellTime || b.purchaseTime || 0;
+      const timeA = normalizeEpochMs(a.sellTime) || normalizeEpochMs(a.purchaseTime);
+      const timeB = normalizeEpochMs(b.sellTime) || normalizeEpochMs(b.purchaseTime);
       return timeA - timeB;
     });
 
     let currentStreak = 0;
+    let currentStreakLossAmount = 0;
     let maxConsecutiveLosses = 0;
+    let maxConsecutiveLossAmount = 0;
 
     for (let i = 0; i < realSettledList.length; i++) {
-      if (realSettledList[i].status === 'lost') {
+      const trade = realSettledList[i];
+      if (trade.status === 'lost') {
         currentStreak++;
+        const lossVal = Math.abs(getTradeProfit(trade)) || Math.abs(Number(trade.stake) || 0);
+        currentStreakLossAmount = Number((currentStreakLossAmount + lossVal).toFixed(2));
         if (currentStreak > maxConsecutiveLosses) {
           maxConsecutiveLosses = currentStreak;
+          maxConsecutiveLossAmount = currentStreakLossAmount;
+        } else if (currentStreak === maxConsecutiveLosses && currentStreakLossAmount > maxConsecutiveLossAmount) {
+          maxConsecutiveLossAmount = currentStreakLossAmount;
         }
-      } else if (realSettledList[i].status === 'won') {
+      } else if (trade.status === 'won') {
         currentStreak = 0;
+        currentStreakLossAmount = 0;
       }
     }
 
@@ -179,11 +199,13 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = React.memo(({
       settled,
       winRate,
       totalPnl: Number(totalPnl.toFixed(2)),
+      maxStake: Number(maxStake.toFixed(2)),
       maxConsecutiveLosses,
+      maxConsecutiveLossAmount: Number(maxConsecutiveLossAmount.toFixed(2)),
       daysCount,
       daysText,
     };
-  }, [boundedTrades]);
+  }, [boundedTrades, isVirtualSystemEnabled]);
 
   // Filter trades based on search term & status
   const filteredTrades = useMemo(() => {
@@ -306,18 +328,6 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = React.memo(({
               </span>
             </span>
 
-            {/* Max Consecutive Losses Badge - placed in front of the number of trades */}
-            <span
-              id="trade-history-max-consecutive-badge"
-              className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/35 font-semibold flex items-center gap-1.5 shadow-sm"
-              title="Highest maximum consecutive losses recorded on real account trades (excluding virtual trades)"
-            >
-              <span className="text-[10px] uppercase font-bold text-rose-400 font-sans tracking-wide">Max Con:</span>
-              <span className="font-bold text-white bg-rose-500/30 px-1.5 py-0.2 rounded font-mono text-[11px]">
-                {stats.maxConsecutiveLosses}
-              </span>
-            </span>
-
             <span
               className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-zinc-800/90 text-zinc-300 border border-zinc-700/60 font-semibold"
               title="Trade history holds up to 5,000 trades without resetting"
@@ -371,40 +381,57 @@ export const TradeHistoryTable: React.FC<TradeHistoryTableProps> = React.memo(({
       <div className="px-4 py-2.5 bg-zinc-950/40 border-b border-zinc-800/60 flex flex-wrap items-center justify-between gap-3 text-xs">
         {/* Quick Stats Strip */}
         <div className="flex items-center gap-3 overflow-x-auto py-0.5">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-zinc-400">
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-zinc-400 shrink-0">
             <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
             <span className="font-semibold text-zinc-300">Win Rate:</span>
             <span className="font-mono font-bold text-white">{stats.winRate}%</span>
           </div>
 
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-emerald-400">
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-emerald-400 shrink-0">
             <CheckCircle className="w-3.5 h-3.5" />
             <span className="font-mono font-bold">{stats.won.toLocaleString()} Won</span>
           </div>
 
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-rose-400">
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-rose-400 shrink-0">
             <XCircle className="w-3.5 h-3.5" />
             <span className="font-mono font-bold">{stats.lost.toLocaleString()} Lost</span>
           </div>
 
-          {/* Max Consecutive Losses Stat in Metrics Strip */}
+          {/* Max Consecutive Losses & Dollar Lost Stat in Metrics Strip */}
           <div
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-rose-400"
-            title="Highest maximum consecutive losses recorded on real account trades (excluding virtual trades)"
+            id="trade-history-max-con-stat"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-rose-400 shrink-0"
+            title="Highest maximum consecutive losses recorded on real account trades and total dollars lost in that streak"
           >
             <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
             <span className="font-semibold text-zinc-300">Max Con:</span>
-            <span className="font-mono font-bold text-rose-300">{stats.maxConsecutiveLosses}</span>
+            <span className="font-mono font-bold text-rose-300">
+              {stats.maxConsecutiveLosses}{' '}
+              <span className="text-rose-400">
+                ({stats.maxConsecutiveLossAmount > 0 ? `-$${stats.maxConsecutiveLossAmount.toFixed(2)}` : '$0.00'})
+              </span>
+            </span>
+          </div>
+
+          {/* Max Stake Recorded Stat in Metrics Strip */}
+          <div
+            id="trade-history-max-stake-stat"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800/80 text-amber-300 shrink-0"
+            title="Highest stake taken by the system across real account trades"
+          >
+            <Coins className="w-3.5 h-3.5 text-amber-400" />
+            <span className="font-semibold text-zinc-300">Max Stake:</span>
+            <span className="font-mono font-bold text-amber-300">${stats.maxStake.toFixed(2)}</span>
           </div>
 
           {stats.open > 0 && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-300">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-300 shrink-0">
               <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
               <span className="font-mono font-semibold">{stats.open} Running</span>
             </div>
           )}
 
-          <div className="text-zinc-500 font-mono">
+          <div className="text-zinc-500 font-mono shrink-0">
             P&L:{' '}
             <span
               className={`font-bold ${
