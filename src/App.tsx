@@ -1623,20 +1623,22 @@ export default function App() {
   }, [computeRealCumulativePnl]);
 
   // Compute exact Unix second when a running trade must settle:
-  // Under SMC Break of Structure / CHoCH, contracts settle when the candle timer reaches 59s (:59),
-  // preventing multi-second drift caused by API execution latency:
-  // - Entry right after candle close (secInCandle <= 25): settles at THIS candle's :59s (candleEpoch + 59)
-  // - Immediate loss re-entry at :59s (secInCandle >= 55): settles at NEXT candle's :59s (candleEpoch + 119)
+  // Uses the user-selected Trade Expiry in minutes (N min -> settles at (N-1)m 59s):
+  // - 1 min -> 59s, 2 min -> 1m 59s (119s), 3 min -> 2m 59s (179s), etc.
+  // Under SMC Break of Structure / CHoCH:
+  // - Entry right after candle close (secInCandle <= 25): settles at candleEpoch + expiryMin * 60 - 1
+  // - Immediate loss re-entry at :59s (secInCandle >= 55): settles at candleEpoch + (expiryMin + 1) * 60 - 1
   const getTradeTargetSettleSec = useCallback((t: TradeRecord): number => {
     const pMs = t.purchaseTime && t.purchaseTime > 0 ? t.purchaseTime : Date.now();
     const pSec = Math.floor(pMs / 1000);
+    const expiryMin = Math.max(1, Math.round(t.durationMinutes ?? paramsRef.current.duration ?? 1));
     if (selectedStrategyRef.current.id === 'smc_structure_confluence') {
       const secInCandle = pSec % 60;
       const candleEpoch = pSec - secInCandle;
-      if (secInCandle >= 55) return candleEpoch + 119;
-      if (secInCandle <= 25) return candleEpoch + 59;
+      if (secInCandle >= 55) return candleEpoch + (expiryMin + 1) * 60 - 1;
+      if (secInCandle <= 25) return candleEpoch + expiryMin * 60 - 1;
     }
-    return pSec + 59;
+    return pSec + expiryMin * 60 - 1;
   }, []);
 
   // Execute trade logic (Direct Deriv WebSocket flow with /api/trade and client-side fallback)
@@ -1809,6 +1811,7 @@ export default function App() {
       }
 
       const type = contractTypeToTrade || p.contractType;
+      const tradeExpiryMinutes = Math.max(1, Math.round(Number(p.duration) || 1));
 
       if (shouldExecuteVirtual) {
         const mDefTarget = VOLATILITY_MARKETS.find((m) => m.symbol === targetSymbol);
@@ -1838,9 +1841,10 @@ export default function App() {
           entrySpot: lastQuote,
           entryBarrier: lastQuote.toFixed(2),
           barrier: lastQuote.toFixed(2),
-          settleTimeRemaining: 59,
+          settleTimeRemaining: tradeExpiryMinutes * 60 - 1,
           settleTriggered: false,
           isVirtualTrade: true,
+          durationMinutes: tradeExpiryMinutes,
         };
         const virtualRem = Math.max(
           0,
@@ -1872,7 +1876,7 @@ export default function App() {
           ? `[VIRTUAL HOOK TRADE EXECUTED]`
           : `[VIRTUAL COUNT (Loss ${virtualCountLossesRef.current}/${p.virtualCountThreshold ?? 3}) TRADE EXECUTED]`;
         setBotStatusMessage(
-          `${tag}: #${virtualContractId} on ${targetSymbolName} (1-min ${type} @ $${virtualStakeVal.toFixed(2)} [Simulated]). Real capital protected! Settle at :59s (${virtualRem}s)`
+          `${tag}: #${virtualContractId} on ${targetSymbolName} (${tradeExpiryMinutes}-min ${type} @ $${virtualStakeVal.toFixed(2)} [Simulated]). Real capital protected! Settle at :59s (${virtualRem}s)`
         );
         lastTradeDirectionRef.current = (type === 'PUT' ? 'PUT' : 'CALL') as 'CALL' | 'PUT';
         setIsTradePending(false);
@@ -1894,7 +1898,7 @@ export default function App() {
         isExecutingTradeRef.current = true;
         setIsTradePending(true);
         isTradePendingRef.current = true;
-        setBotStatusMessage(`Executing 1-min ${type} on ${targetSymbolName} ($${currentStake.toFixed(2)}) for next candle open...`);
+        setBotStatusMessage(`Executing ${tradeExpiryMinutes}-min ${type} on ${targetSymbolName} ($${currentStake.toFixed(2)}) for next candle open...`);
 
         const activeSession = sessionAuthRef.current;
         let tokenToUse = activeSession?.token;
@@ -1920,7 +1924,7 @@ export default function App() {
           basis: 'stake',
           contract_type: type,
           currency: currency || 'USD',
-          duration: 1, // 1-minute candle duration
+          duration: tradeExpiryMinutes,
           duration_unit: 'm',
           symbol: targetSymbol,
         };
@@ -1946,7 +1950,7 @@ export default function App() {
               symbol: targetSymbol,
               contractType: type,
               amount: currentStake,
-              duration: 1,
+              duration: tradeExpiryMinutes,
               durationUnit: 'm',
               currency: currency || 'USD',
               timeoutMs: 2500,
@@ -2016,7 +2020,7 @@ export default function App() {
                 contractType: type,
                 stake: currentStake,
                 currency: currency || 'USD',
-                duration: 1,
+                duration: tradeExpiryMinutes,
                 durationUnit: 'm',
               });
               if (directBrokerResult?.buy?.buy?.contract_id) {
@@ -2107,9 +2111,10 @@ export default function App() {
           entrySpot: lastQuote,
           entryBarrier: lastQuote.toFixed(2),
           barrier: lastQuote.toFixed(2),
-          settleTimeRemaining: 59,
+          settleTimeRemaining: tradeExpiryMinutes * 60 - 1,
           settleTriggered: false,
           isVirtualTrade: false,
+          durationMinutes: tradeExpiryMinutes,
         };
         const initialRemaining = Math.max(
           0,
@@ -2133,7 +2138,7 @@ export default function App() {
         derivWs.subscribeProposalOpenContract(contractId);
 
         setActiveTradeCountdown(initialRemaining);
-        setBotStatusMessage(`[TRADE EXECUTED]: #${contractId} on ${targetSymbolName} (1-min ${type} @ $${purchasePrice.toFixed(2)}). Settle at :59s (${initialRemaining}s)`);
+        setBotStatusMessage(`[TRADE EXECUTED]: #${contractId} on ${targetSymbolName} (${tradeExpiryMinutes}-min ${type} @ $${purchasePrice.toFixed(2)}). Settle at :59s (${initialRemaining}s)`);
 
         lastTradeDirectionRef.current = (type === 'PUT' ? 'PUT' : 'CALL') as 'CALL' | 'PUT';
         // If system was paused waiting for a fresh signal, executing this new signal resumes active trading
@@ -5349,8 +5354,10 @@ export default function App() {
           marketPendingBreaksRef.current[sym] = null;
           if (sym === paramsRef.current.symbol) pendingStructureBreakRef.current = null;
 
+          const smcExpiryMin = Math.max(1, Math.round(paramsRef.current.duration || 1));
+          const smcSettleLabel = smcExpiryMin > 1 ? `${smcExpiryMin - 1}m 59s` : '59s';
           setBotStatusMessage(
-            `[${mDef.shortName} Candle Closed]: ${pending.type} (${pending.direction.toUpperCase()} @ ${pending.level.toFixed(2)}) closed at ${targetClosedCandle.close.toFixed(2)}! Executing 1-min ${chosenType} ($${currentStake.toFixed(2)}) immediately (settles at 59s)...`
+            `[${mDef.shortName} Candle Closed]: ${pending.type} (${pending.direction.toUpperCase()} @ ${pending.level.toFixed(2)}) closed at ${targetClosedCandle.close.toFixed(2)}! Executing ${smcExpiryMin}-min ${chosenType} ($${currentStake.toFixed(2)}) immediately (settles at ${smcSettleLabel})...`
           );
           executeTrade(chosenType, currentStake, breakId, sym, mDef.name);
           if (!isIndiv) {
@@ -5460,8 +5467,10 @@ export default function App() {
           marketPendingBreaksRef.current[sym] = null;
           if (sym === paramsRef.current.symbol) pendingStructureBreakRef.current = null;
 
+          const smcExpiryMin = Math.max(1, Math.round(paramsRef.current.duration || 1));
+          const smcSettleLabel = smcExpiryMin > 1 ? `${smcExpiryMin - 1}m 59s` : '59s';
           setBotStatusMessage(
-            `[${mDef.shortName} Candle Closed]: ${justClosedBreak.type} (${justClosedBreak.direction.toUpperCase()} @ ${justClosedBreak.level.toFixed(2)}) closed! Executing 1-min ${chosenType} ($${currentStake.toFixed(2)}) immediately (settles at 59s)...`
+            `[${mDef.shortName} Candle Closed]: ${justClosedBreak.type} (${justClosedBreak.direction.toUpperCase()} @ ${justClosedBreak.level.toFixed(2)}) closed! Executing ${smcExpiryMin}-min ${chosenType} ($${currentStake.toFixed(2)}) immediately (settles at ${smcSettleLabel})...`
           );
           executeTrade(chosenType, currentStake, justClosedBreak.id, sym, mDef.name);
           if (!isIndiv) {
@@ -5666,16 +5675,9 @@ export default function App() {
         if (runningTrade && runningTrade.status === 'open') {
           const pTime = runningTrade.purchaseTime || Date.now();
           const tradeAge = Math.floor((Date.now() - pTime) / 1000);
-          const isLocalSimOrVirtual = Boolean(
-            runningTrade.isVirtualTrade ||
-            (typeof runningTrade.id === 'string' && runningTrade.id.startsWith('VIRTUAL-')) ||
-            (typeof runningTrade.shortcode === 'string' && runningTrade.shortcode.startsWith('DEMO_')) ||
-            derivWs.getIsSimulated() ||
-            !(sessionAuthRef.current?.token || autoRecoveryStorage.loadActiveSession()?.token) ||
-            (sessionAuthRef.current?.token || autoRecoveryStorage.loadActiveSession()?.token || '').startsWith('DEMO')
-          );
-          // Wait full 1-minute duration before settling (59s for virtual/sim, 60s+ for live Deriv contracts)
-          const minDurationSec = isLocalSimOrVirtual ? 59 : 60;
+          // Wait configured trade expiry duration before settling (e.g. 1m -> 59s, 2m -> 1m 59s, 3m -> 2m 59s)
+          const runningExpiryMin = Math.max(1, Math.round(runningTrade.durationMinutes ?? p.duration ?? 1));
+          const minDurationSec = runningExpiryMin * 60 - 1;
 
           if (tradeAge < minDurationSec) {
             continue;
@@ -5969,7 +5971,7 @@ export default function App() {
       // 1. Active trade countdown & exact :59s candle-timer settlement
       const currentActiveTrades = Array.from(activeTradesRef.current.values());
       if (currentActiveTrades.length > 0) {
-        let minRemaining = 60;
+        let minRemaining = Infinity;
         for (const openTrade of currentActiveTrades) {
           if (openTrade && openTrade.status === 'open') {
             if (!openTrade.purchaseTime || openTrade.purchaseTime <= 0) {
@@ -5984,7 +5986,7 @@ export default function App() {
             }
           }
         }
-        setActiveTradeCountdown(minRemaining);
+        setActiveTradeCountdown(minRemaining === Infinity ? 0 : minRemaining);
       } else {
         const openTrade = activeTradeRef.current;
         if (openTrade && openTrade.status === 'open') {
@@ -7944,6 +7946,7 @@ export default function App() {
                 symbolName: resolvedSymbolName,
                 purchaseTime: preservedPurchaseTime,
                 sellTime: undefined,
+                durationMinutes: original.durationMinutes ?? trade.durationMinutes,
               };
               tradeRecordsRef.current = updated;
               return updated;
@@ -8627,6 +8630,7 @@ export default function App() {
             )}
             secondsRemaining={activeTradeCountdown}
             isVirtualSystemEnabled={Boolean(params.virtualHookEnabled || params.virtualSwitchEnabled || params.virtualCountEnabled)}
+            defaultExpiryMinutes={params.duration}
           />
         )}
 
@@ -8717,12 +8721,16 @@ export default function App() {
           selectedStrategy={selectedStrategy}
           onSelectStrategy={(strat) => {
             setSelectedStrategy(strat);
-            setParams((prev) => ({
-              ...prev,
-              contractType: strat.defaultContractType,
-              duration: strat.recommendedDuration,
-              multiplier: strat.recommendedMultiplier,
-            }));
+            setParams((prev) => {
+              const updated = {
+                ...prev,
+                contractType: strat.defaultContractType,
+                duration: prev.duration >= 1 ? prev.duration : strat.recommendedDuration,
+                multiplier: strat.recommendedMultiplier,
+              };
+              autoRecoveryStorage.saveTradingParams(updated);
+              return updated;
+            });
           }}
           isAutoTrading={isAutoTrading}
           onToggleAutoTrading={handleToggleAutoTrading}

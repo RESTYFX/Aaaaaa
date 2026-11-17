@@ -1487,6 +1487,8 @@ export class DerivWebSocketService {
     const mkt = VOLATILITY_MARKETS.find((m) => m.symbol === params.symbol);
     const resolvedName = mkt?.name || params.symbol;
 
+    const expiryMin = params.duration_unit === 'm' ? Math.max(1, Math.round(params.duration || 1)) : 1;
+
     const openTrade: TradeRecord = {
       id: String(dummyContractId),
       contractId: dummyContractId,
@@ -1501,12 +1503,13 @@ export class DerivWebSocketService {
       entrySpot: entrySpot,
       entryBarrier: entrySpot.toFixed(2),
       barrier: entrySpot.toFixed(2),
+      durationMinutes: params.duration_unit === 'm' ? expiryMin : undefined,
     };
 
     this.handlers.onTradeUpdate?.(openTrade);
 
-    // If 1-minute expiry, settle at 59 seconds (or standard 59s settlement for 1m options)
-    const settleDurationSec = params.duration_unit === 'm' ? 59 : Math.max(2, params.duration);
+    // If minute expiry, settle at (N * 60 - 1) seconds (e.g. 1m -> 59s, 2m -> 1m 59s, 3m -> 2m 59s)
+    const settleDurationSec = params.duration_unit === 'm' ? Math.max(59, expiryMin * 60 - 1) : Math.max(2, params.duration);
 
     setTimeout(() => {
       const exitSpot = this.simQuotes.get(params.symbol) || this.lastSimQuote;

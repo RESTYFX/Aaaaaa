@@ -121,8 +121,10 @@ export const TradingSection: React.FC<TradingSectionProps> = ({
 }) => {
   const [tpInput, setTpInput] = React.useState<string>(() => String(params.takeProfit ?? 10));
   const [slInput, setSlInput] = React.useState<string>(() => String(params.stopLoss ?? 10));
+  const [expiryInput, setExpiryInput] = React.useState<string>(() => String(Math.max(1, Math.round(params.duration || 1))));
   const [tpFocused, setTpFocused] = React.useState(false);
   const [slFocused, setSlFocused] = React.useState(false);
+  const [expiryFocused, setExpiryFocused] = React.useState(false);
 
   React.useEffect(() => {
     if (!tpFocused && params.takeProfit > 0) {
@@ -135,6 +137,12 @@ export const TradingSection: React.FC<TradingSectionProps> = ({
       setSlInput(String(params.stopLoss));
     }
   }, [params.stopLoss, slFocused]);
+
+  React.useEffect(() => {
+    if (!expiryFocused) {
+      setExpiryInput(String(Math.max(1, Math.round(params.duration || 1))));
+    }
+  }, [params.duration, expiryFocused]);
 
   return (
     <div className="rounded-2xl bg-zinc-900/70 border border-zinc-800/80 overflow-hidden backdrop-blur-sm">
@@ -177,22 +185,26 @@ export const TradingSection: React.FC<TradingSectionProps> = ({
 
       <div className="p-2.5 sm:p-4 md:p-5 space-y-3 sm:space-y-4">
         {/* Continuous Trade Strategy Banner */}
-        {selectedStrategy?.id === 'continuous_trade' && (
-          <div className="p-3 rounded-xl bg-gradient-to-r from-emerald-950/40 via-zinc-900/90 to-cyan-950/40 border border-emerald-500/40 text-xs shadow-md">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="flex items-center gap-2">
-                <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
-                <span className="font-bold text-emerald-300">Continuous Trade Strategy Active</span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Every Candle @ 58s (59s Settle)
-                </span>
+        {selectedStrategy?.id === 'continuous_trade' && (() => {
+          const expiryMin = Math.max(1, Math.round(params.duration || 1));
+          const settleLabel = expiryMin > 1 ? `${expiryMin - 1}m 59s` : '59s';
+          return (
+            <div className="p-3 rounded-xl bg-gradient-to-r from-emerald-950/40 via-zinc-900/90 to-cyan-950/40 border border-emerald-500/40 text-xs shadow-md">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="font-bold text-emerald-300">Continuous Trade Strategy Active</span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    {expiryMin}-Min Expiry (@ 58s / {settleLabel} Settle)
+                  </span>
+                </div>
               </div>
+              <p className="text-zinc-300 text-[11px] mt-1.5">
+                Continuously executes <strong>{expiryMin}-minute</strong> trades at <strong>58s</strong> based on the latest <strong>Change of Character (CHoCH)</strong>. If bullish CHoCH, the bot continuously buys (Rise/CALL) until a bearish CHoCH occurs, immediately flipping to selling (Fall/PUT). Settles at <strong>{settleLabel}</strong> with instant lot size recovery calculation on the next trade.
+              </p>
             </div>
-            <p className="text-zinc-300 text-[11px] mt-1.5">
-              Continuously executes trades at <strong>58s</strong> of every candle based on the latest <strong>Change of Character (CHoCH)</strong>. If bullish CHoCH, the bot continuously buys (Rise/CALL) until a bearish CHoCH occurs, immediately flipping to selling (Fall/PUT). Settle occurs at 59s with instant lot size recovery calculation on the next trade.
-            </p>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Trading Parameters 2-Column Grid (Active across mobile, tablet & desktop) */}
         <div className="grid grid-cols-2 gap-2 sm:gap-3">
@@ -421,6 +433,74 @@ export const TradingSection: React.FC<TradingSectionProps> = ({
             realConsecutiveLosses={realConsecutiveLosses}
             currency={currency}
           />
+
+          {/* 9. Trade Expiry (Row 5, Full Width) */}
+          {(() => {
+            const expiryMin = Math.max(1, Math.round(params.duration || 1));
+            const settleLabel = expiryMin > 1 ? `${expiryMin - 1}m 59s` : '59s';
+            return (
+              <div className="col-span-2 p-2.5 sm:p-3 rounded-xl bg-zinc-950/60 border border-zinc-800/80 focus-within:border-cyan-500/60 transition-colors min-w-0">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                  <label htmlFor="trade-expiry-input" className="text-[11px] sm:text-xs font-semibold text-cyan-400">
+                    Trade Expiry (Minutes)
+                  </label>
+                  <span className="text-[10px] font-mono font-semibold text-zinc-400 bg-zinc-900/90 border border-zinc-800 px-2 py-0.5 rounded">
+                    Settles at <span className="text-amber-400 font-bold">{settleLabel}</span>
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative flex-1 min-w-[110px]">
+                    <input
+                      id="trade-expiry-input"
+                      type="number"
+                      min="1"
+                      max="1440"
+                      step="1"
+                      value={expiryInput}
+                      onFocus={() => setExpiryFocused(true)}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setExpiryInput(raw);
+                        const parsed = parseInt(raw, 10);
+                        if (!isNaN(parsed) && parsed >= 1) {
+                          onUpdateParams({ duration: Math.min(1440, parsed), durationUnit: 'm' });
+                        }
+                      }}
+                      onBlur={() => {
+                        setExpiryFocused(false);
+                        const parsed = parseInt(expiryInput, 10);
+                        const valid = !isNaN(parsed) && parsed >= 1 ? Math.min(1440, parsed) : Math.max(1, Math.round(params.duration || 1));
+                        onUpdateParams({ duration: valid, durationUnit: 'm' });
+                        setExpiryInput(String(valid));
+                      }}
+                      className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1 text-xs font-mono font-bold text-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                      placeholder="1"
+                    />
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 font-mono text-[10px]">min</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 5, 10].map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => {
+                          setExpiryInput(String(m));
+                          onUpdateParams({ duration: m, durationUnit: 'm' });
+                        }}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold border transition-colors cursor-pointer ${
+                          expiryMin === m
+                            ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-300'
+                            : 'bg-zinc-900 border-zinc-700/70 text-zinc-400 hover:text-white hover:border-zinc-600'
+                        }`}
+                      >
+                        {m}m
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* In-Mode and Inter-Mode Martingale Section (10 Modes) */}

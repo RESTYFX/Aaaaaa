@@ -174,6 +174,7 @@ export interface TradeRecord {
   settleTimeRemaining?: number;
   settleTriggered?: boolean;
   isVirtualTrade?: boolean; // True if executed under Virtual Hook simulation
+  durationMinutes?: number; // Trade expiry in minutes selected by user (default 1)
 }
 
 export interface MarketTick {

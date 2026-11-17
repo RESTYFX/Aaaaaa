@@ -11,7 +11,18 @@ interface ActiveTradeBannerProps {
   marketQuotes?: Record<string, number>;
   secondsRemaining: number;
   isVirtualSystemEnabled?: boolean;
+  defaultExpiryMinutes?: number;
 }
+
+const formatCountdown = (sec: number): string => {
+  const s = Math.max(0, Math.floor(sec));
+  if (s >= 60) {
+    const mins = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${mins}m ${String(rem).padStart(2, '0')}s`;
+  }
+  return `${s}s`;
+};
 
 const SingleTradeCard: React.FC<{
   trade: TradeRecord;
@@ -19,7 +30,8 @@ const SingleTradeCard: React.FC<{
   secondsRemaining: number;
   isMultiCard?: boolean;
   isVirtualSystemEnabled?: boolean;
-}> = ({ trade, currentPrice, secondsRemaining, isMultiCard, isVirtualSystemEnabled = false }) => {
+  defaultExpiryMinutes?: number;
+}> = ({ trade, currentPrice, secondsRemaining, isMultiCard, isVirtualSystemEnabled = false, defaultExpiryMinutes = 1 }) => {
   const isCall = trade.contractType.includes('CALL') || trade.contractType.includes('RISE');
   const entryBarrier =
     trade.entryBarrier !== undefined && trade.entryBarrier !== null
@@ -37,7 +49,9 @@ const SingleTradeCard: React.FC<{
     ? Math.max(0, trade.settleTimeRemaining)
     : Math.max(0, secondsRemaining);
 
-  const progressPct = Math.max(0, Math.min(100, ((59 - remaining) / 59) * 100));
+  const expiryMin = Math.max(1, Math.round(trade.durationMinutes || defaultExpiryMinutes || 1));
+  const totalSettleSec = expiryMin * 60 - 1;
+  const progressPct = Math.max(0, Math.min(100, ((totalSettleSec - remaining) / Math.max(1, totalSettleSec)) * 100));
 
   return (
     <div
@@ -76,7 +90,7 @@ const SingleTradeCard: React.FC<{
                   isCall ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
                 }`}
               >
-                1-Min {isCall ? 'RISE' : 'FALL'}
+                {expiryMin}-Min {isCall ? 'RISE' : 'FALL'}
               </span>
               {isVirtualRecord(trade, isVirtualSystemEnabled) && (
                 <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
@@ -118,12 +132,12 @@ const SingleTradeCard: React.FC<{
           <div>
             <span className="text-[9px] text-zinc-500 block uppercase">Exit Barrier</span>
             <span className="text-[11px] sm:text-xs text-amber-400 font-bold">
-              {trade.exitBarrier ? String(trade.exitBarrier) : 'Locks @ 59s'}
+              {trade.exitBarrier ? String(trade.exitBarrier) : 'Locks @ :59s'}
             </span>
           </div>
         </div>
 
-        {/* Right: 59-second settlement countdown */}
+        {/* Right: Dynamic settlement countdown */}
         <div className="flex items-center gap-2.5 ml-auto">
           <div className="text-right font-mono">
             <span className="text-[9px] text-zinc-400 flex items-center justify-end gap-1">
@@ -131,8 +145,8 @@ const SingleTradeCard: React.FC<{
               <span>Settling</span>
             </span>
             <div className="text-sm sm:text-base font-black text-amber-400 flex items-baseline justify-end gap-1">
-              <span>{Math.max(0, remaining)}s</span>
-              <span className="text-[9px] text-zinc-500 font-sans font-normal">/ 59s</span>
+              <span>{formatCountdown(remaining)}</span>
+              <span className="text-[9px] text-zinc-500 font-sans font-normal">/ {formatCountdown(totalSettleSec)}</span>
             </div>
           </div>
 
@@ -159,6 +173,7 @@ export const ActiveTradeBanner: React.FC<ActiveTradeBannerProps> = ({
   marketQuotes = {},
   secondsRemaining,
   isVirtualSystemEnabled = false,
+  defaultExpiryMinutes = 1,
 }) => {
   // Aggregate active trades from either activeTrades array or activeTrade fallback
   const allActiveTrades: TradeRecord[] = [];
@@ -192,6 +207,7 @@ export const ActiveTradeBanner: React.FC<ActiveTradeBannerProps> = ({
             secondsRemaining={secondsRemaining}
             isMultiCard={allActiveTrades.length > 1}
             isVirtualSystemEnabled={isVirtualSystemEnabled}
+            defaultExpiryMinutes={defaultExpiryMinutes}
           />
         );
       })}
