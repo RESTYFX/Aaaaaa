@@ -28,6 +28,7 @@ import {
   NetworkSignalState,
   CorrectedLossItem,
   DEFAULT_IN_INTER_MODES,
+  normalizeModesConfig,
   MarketMartingaleState,
 } from './types';
 import { TRADING_STRATEGIES, POPULAR_SYMBOLS } from './data/strategies';
@@ -122,6 +123,16 @@ export function calculateConsecutiveLossesAll(
 
 function roundInInterStake(val: number): number {
   return Math.max(0.35, Math.floor((val + 1e-9) * 100) / 100);
+}
+
+// Calculate a Mode's 1st stake so that winning `steps` trades at `payoutPercent` (default 83%)
+// recovers 100% of `totalLoss` (targetProfitPerTrade = totalLoss / steps, stake = targetProfitPerTrade / payoutRate)
+function calculateStepFirstStake(totalLoss: number, steps: number, payoutPercent: number = 83): number {
+  const safeSteps = Math.max(1, Math.round(steps || 1));
+  const safePayoutRate = Math.max(0.1, (payoutPercent || 83) / 100);
+  const targetProfitPerTrade = Math.max(0, totalLoss) / safeSteps;
+  const rawStake = targetProfitPerTrade / safePayoutRate;
+  return Math.max(0.35, Math.ceil((rawStake - 1e-9) * 100) / 100);
 }
 
 export default function App() {
@@ -282,9 +293,7 @@ export default function App() {
         maxMartingaleAction: saved.maxMartingaleAction ?? 'stop',
         inInterModeEnabled: saved.inInterModeEnabled ?? false,
         consecutivesToSwitchMode: saved.consecutivesToSwitchMode ?? 3,
-        modesConfig: Array.isArray(saved.modesConfig) && saved.modesConfig.length === 10
-          ? saved.modesConfig
-          : DEFAULT_IN_INTER_MODES,
+        modesConfig: normalizeModesConfig(saved.modesConfig),
         virtualHookEnabled: saved.virtualHookEnabled ?? false,
         virtualHookLossThreshold: saved.virtualHookLossThreshold ?? 1,
         virtualHookVirtualStake: saved.virtualHookVirtualStake ?? (saved.stake || 0.35),
@@ -399,6 +408,9 @@ export default function App() {
   // In-Mode & Inter-Mode Martingale state (10 Escalating Modes)
   const [currentMode, setCurrentMode] = useState<number>(() => {
     return persistedMartingale?.currentMode ?? 0;
+  });
+  const [maxModeReached, setMaxModeReached] = useState<number>(() => {
+    return Math.max(persistedMartingale?.maxModeReached ?? 0, persistedMartingale?.currentMode ?? 0);
   });
   const [defaultModeLossCount, setDefaultModeLossCount] = useState<number>(() => {
     return persistedMartingale?.defaultModeLossCount ?? 0;
@@ -524,6 +536,9 @@ export default function App() {
 
   const currentModeRef = useRef<number>(0);
   currentModeRef.current = currentMode;
+
+  const maxModeReachedRef = useRef<number>(maxModeReached);
+  maxModeReachedRef.current = maxModeReached;
 
   const defaultModeLossCountRef = useRef<number>(0);
   defaultModeLossCountRef.current = defaultModeLossCount;
@@ -974,6 +989,13 @@ export default function App() {
   }, [connectionState, account?.loginid, account?.isVirtual, account?.appId, account?.currency, account?.fullname, currentBalance, currency, appId]);
 
   useEffect(() => {
+    if (currentMode > maxModeReachedRef.current) {
+      maxModeReachedRef.current = currentMode;
+      setMaxModeReached(currentMode);
+    }
+  }, [currentMode]);
+
+  useEffect(() => {
     autoRecoveryStorage.saveMartingaleState({
       currentMartingaleStep,
       cycleLossCount,
@@ -983,6 +1005,7 @@ export default function App() {
       accumulatedLoss,
       currentPhase,
       currentMode,
+      maxModeReached,
       defaultModeLossCount,
       inModeLossCount,
       modeFirstStake,
@@ -1006,6 +1029,7 @@ export default function App() {
     accumulatedLoss,
     currentPhase,
     currentMode,
+    maxModeReached,
     defaultModeLossCount,
     inModeLossCount,
     modeFirstStake,
@@ -1142,7 +1166,7 @@ export default function App() {
       return indivStake;
     }
 
-    // Check In-Mode and Inter-Mode Martingale:
+    // Check In-Mode & Steps Martingale:
     if (p.inInterModeEnabled) {
       const mode = currentModeRef.current;
       if (mode >= 1 && mode <= 10) {
@@ -1150,22 +1174,20 @@ export default function App() {
           return Number(base.toFixed(2));
         }
 
-        const modes = Array.isArray(p.modesConfig) && p.modesConfig.length === 10
-          ? p.modesConfig
-          : DEFAULT_IN_INTER_MODES;
+        const modes = normalizeModesConfig(p.modesConfig);
         const modeConfig = modes[mode - 1];
         const inMultiplier = modeConfig.inModeMartingale || 1.4;
+        const modeSteps = Math.max(1, Math.round(modeConfig.steps || 5));
 
-        // Mode 1st trade stake chains from previous mode's 1st stake * current mode's interModeMartingale
-        let chainedFirstStake = base;
-        for (let m = 0; m < mode; m++) {
-          chainedFirstStake = roundInInterStake(
-            chainedFirstStake * (modes[m]?.interModeMartingale || 1.5)
-          );
-        }
+        // Mode 1st stake is calculated from accumulated loss divided by configured Steps at Deriv payout %
+        const fallbackStepStake = calculateStepFirstStake(
+          Math.max(modeAccumulatedLossRef.current, accumulatedLossRef.current),
+          modeSteps,
+          p.autoMartingalePayoutPercent || 83
+        );
         const initialModeStake = modeFirstStakeRef.current > 0
           ? modeFirstStakeRef.current
-          : chainedFirstStake;
+          : fallbackStepStake;
 
         const inLoss = inModeLossCountRef.current;
         if (inLoss <= 0) {
@@ -2321,9 +2343,8 @@ export default function App() {
 
           if (p.inInterModeEnabled && !isTradeRecordVirtual(finishedTrade) && savedPreWin) {
             const switchThreshold = Math.max(1, p.consecutivesToSwitchMode || 3);
-            const modes = Array.isArray(p.modesConfig) && p.modesConfig.length === 10
-              ? p.modesConfig
-              : DEFAULT_IN_INTER_MODES;
+            const modes = normalizeModesConfig(p.modesConfig);
+            const payoutPct = p.autoMartingalePayoutPercent || 83;
             const prevMode = savedPreWin.currentMode || 0;
             const prevDefaultLoss = savedPreWin.defaultModeLossCount || 0;
             const prevInModeLoss = savedPreWin.inModeLossCount || 0;
@@ -2331,9 +2352,13 @@ export default function App() {
             if (prevMode === 0) {
               const nextDef = prevDefaultLoss + 1;
               if (nextDef >= switchThreshold) {
-                const m1First = roundInInterStake(p.stake * (modes[0]?.interModeMartingale || 1.5));
+                const m1First = calculateStepFirstStake(prevSeqLoss, modes[0]?.steps || 5, payoutPct);
                 setCurrentMode(1);
                 currentModeRef.current = 1;
+                if (1 > maxModeReachedRef.current) {
+                  maxModeReachedRef.current = 1;
+                  setMaxModeReached(1);
+                }
                 setDefaultModeLossCount(0);
                 defaultModeLossCountRef.current = 0;
                 setInModeLossCount(0);
@@ -2354,12 +2379,16 @@ export default function App() {
               const nextInMode = prevInModeLoss + 1;
               const prevFirst = savedPreWin.modeFirstStake > 0
                 ? savedPreWin.modeFirstStake
-                : roundInInterStake(p.stake * (modes[0]?.interModeMartingale || 1.5));
+                : calculateStepFirstStake(prevSeqLoss, modes[prevMode - 1]?.steps || 5, payoutPct);
               if (nextInMode >= switchThreshold && prevMode < 10) {
                 const nextM = prevMode + 1;
-                const nextFirst = roundInInterStake(prevFirst * (modes[nextM - 1]?.interModeMartingale || 1.5));
+                const nextFirst = calculateStepFirstStake(prevSeqLoss, modes[nextM - 1]?.steps || 5, payoutPct);
                 setCurrentMode(nextM);
                 currentModeRef.current = nextM;
+                if (nextM > maxModeReachedRef.current) {
+                  maxModeReachedRef.current = nextM;
+                  setMaxModeReached(nextM);
+                }
                 setInModeLossCount(0);
                 inModeLossCountRef.current = 0;
                 setModeFirstStake(nextFirst);
@@ -3380,15 +3409,12 @@ export default function App() {
             );
           } else {
             // Partial recovery: reset in-mode consecutive losses and Post-Martingale phase attempts, keep Mode M & 1st stake until all loss is recovered!
-            const modes = Array.isArray(p.modesConfig) && p.modesConfig.length === 10
-              ? p.modesConfig
-              : DEFAULT_IN_INTER_MODES;
-            let fallbackFirstStake = p.stake;
-            for (let m = 0; m < mode; m++) {
-              fallbackFirstStake = roundInInterStake(
-                fallbackFirstStake * (modes[m]?.interModeMartingale || 1.5)
-              );
-            }
+            const modes = normalizeModesConfig(p.modesConfig);
+            const fallbackFirstStake = calculateStepFirstStake(
+              remainingLoss,
+              modes[mode - 1]?.steps || 5,
+              p.autoMartingalePayoutPercent || 83
+            );
             const mode1stStake = modeFirstStakeRef.current > 0
               ? modeFirstStakeRef.current
               : fallbackFirstStake;
@@ -4130,9 +4156,8 @@ export default function App() {
 
         if (p.inInterModeEnabled && !isTradeRecordVirtual(finishedTrade)) {
           const switchThreshold = Math.max(1, p.consecutivesToSwitchMode || 3);
-          const modes = Array.isArray(p.modesConfig) && p.modesConfig.length === 10
-            ? p.modesConfig
-            : DEFAULT_IN_INTER_MODES;
+          const modes = normalizeModesConfig(p.modesConfig);
+          const payoutPct = p.autoMartingalePayoutPercent || 83;
           const currentModeVal = currentModeRef.current;
           let modeStatusNote = '';
 
@@ -4153,14 +4178,18 @@ export default function App() {
             // Check if consecutive losses in Default Mode hit threshold to switch to Mode 1
             if (nextDefaultLossCount >= switchThreshold) {
               const mode1Config = modes[0];
-              const mode1FirstStake = roundInInterStake(
-                p.stake * (mode1Config.interModeMartingale || 1.5)
-              );
+              const mode1Steps = Math.max(1, Math.round(mode1Config.steps || 5));
+              const mode1FirstStake = calculateStepFirstStake(newTotalSeqLoss, mode1Steps, payoutPct);
+              const targetProfitPerStep = newTotalSeqLoss / mode1Steps;
 
               setDefaultModeLossCount(0);
               defaultModeLossCountRef.current = 0;
               setCurrentMode(1);
               currentModeRef.current = 1;
+              if (1 > maxModeReachedRef.current) {
+                maxModeReachedRef.current = 1;
+                setMaxModeReached(1);
+              }
               setInModeLossCount(0);
               inModeLossCountRef.current = 0;
               setModeFirstStake(mode1FirstStake);
@@ -4168,7 +4197,7 @@ export default function App() {
               setModeAccumulatedLoss(newTotalSeqLoss);
               modeAccumulatedLossRef.current = newTotalSeqLoss;
 
-              modeStatusNote = `[Switch to Mode 1]: Hit ${nextDefaultLossCount}/${switchThreshold} consecutive losses in Default Mode (-$${newTotalSeqLoss.toFixed(2)} total loss). Shifted to Mode 1! 1st stake = $${p.stake.toFixed(2)} × ${mode1Config.interModeMartingale}x = $${mode1FirstStake.toFixed(2)}.`;
+              modeStatusNote = `[Switch to Mode 1]: Hit ${nextDefaultLossCount}/${switchThreshold} consecutive losses in Default Mode (-$${newTotalSeqLoss.toFixed(2)} total loss). Shifted to Mode 1 (${mode1Steps} steps @ ${payoutPct}% payout → $${targetProfitPerStep.toFixed(2)}/win)! 1st stake = $${mode1FirstStake.toFixed(2)}.`;
             } else {
               // Stay in Default Mode using standard Martingale progression
               setDefaultModeLossCount(nextDefaultLossCount);
@@ -4191,13 +4220,8 @@ export default function App() {
             setCurrentMartingaleStep(nextStep);
             currentMartingaleStepRef.current = nextStep;
 
-            // Compute current mode's 1st stake accurately (chained if ref wasn't set)
-            let fallbackFirst = p.stake;
-            for (let m = 0; m < mode; m++) {
-              fallbackFirst = roundInInterStake(
-                fallbackFirst * (modes[m]?.interModeMartingale || 1.5)
-              );
-            }
+            // Current mode's 1st stake (fallback computed from configured Steps if ref wasn't set)
+            const fallbackFirst = calculateStepFirstStake(newSeqLoss, modeConfig.steps || 5, payoutPct);
             const currentModeFirstStake = modeFirstStakeRef.current > 0
               ? modeFirstStakeRef.current
               : fallbackFirst;
@@ -4207,19 +4231,23 @@ export default function App() {
               if (mode < 10) {
                 const nextMode = mode + 1;
                 const nextConfig = modes[nextMode - 1];
-                // Multiply PREVIOUS mode's 1st stake by the next mode's Inter-Mode Martingale!
-                const nextFirstStake = roundInInterStake(
-                  currentModeFirstStake * (nextConfig.interModeMartingale || 1.5)
-                );
+                const nextSteps = Math.max(1, Math.round(nextConfig.steps || 5));
+                // Calculate next mode's 1st stake so `nextSteps` wins at `payoutPct`% recover all accumulated losses!
+                const nextFirstStake = calculateStepFirstStake(newSeqLoss, nextSteps, payoutPct);
+                const targetProfitPerStep = newSeqLoss / nextSteps;
 
                 setCurrentMode(nextMode);
                 currentModeRef.current = nextMode;
+                if (nextMode > maxModeReachedRef.current) {
+                  maxModeReachedRef.current = nextMode;
+                  setMaxModeReached(nextMode);
+                }
                 setInModeLossCount(0);
                 inModeLossCountRef.current = 0;
                 setModeFirstStake(nextFirstStake);
                 modeFirstStakeRef.current = nextFirstStake;
 
-                modeStatusNote = `[Shift to Mode ${nextMode}]: Mode ${mode} hit ${nextInModeLoss}/${switchThreshold} consecutive losses (-$${newSeqLoss.toFixed(2)} total loss). Shifted to Mode ${nextMode}! 1st stake = $${currentModeFirstStake.toFixed(2)} × ${nextConfig.interModeMartingale}x = $${nextFirstStake.toFixed(2)}.`;
+                modeStatusNote = `[Shift to Mode ${nextMode}]: Mode ${mode} hit ${nextInModeLoss}/${switchThreshold} consecutive losses (-$${newSeqLoss.toFixed(2)} total loss). Shifted to Mode ${nextMode} (${nextSteps} steps @ ${payoutPct}% payout → $${targetProfitPerStep.toFixed(2)}/win)! 1st stake = $${nextFirstStake.toFixed(2)}.`;
               } else {
                 // Mode 10 limit reached
                 const maxAction = p.maxMartingaleAction || 'stop';
@@ -7016,6 +7044,10 @@ export default function App() {
     }
     setCorrectedLossItems([]);
     autoRecoveryStorage.clearCorrectedLossItems();
+    const baselineMaxMode = currentModeRef.current > 0 ? currentModeRef.current : 0;
+    setMaxModeReached(baselineMaxMode);
+    maxModeReachedRef.current = baselineMaxMode;
+    autoRecoveryStorage.saveMartingaleState({ maxModeReached: baselineMaxMode });
 
     setBotStatusMessage('[TRADE HISTORY CLEARED]: All past trade records removed and P&L reset to $0.00.');
   }, []);
@@ -8437,6 +8469,8 @@ export default function App() {
     pausedFromMarketRef.current = null;
     setCurrentMode(0);
     currentModeRef.current = 0;
+    setMaxModeReached(0);
+    maxModeReachedRef.current = 0;
     setDefaultModeLossCount(0);
     defaultModeLossCountRef.current = 0;
     setInModeLossCount(0);
@@ -8481,6 +8515,7 @@ export default function App() {
       accumulatedLoss: 0,
       currentPhase: 1,
       currentMode: 0,
+      maxModeReached: 0,
       defaultModeLossCount: 0,
       inModeLossCount: 0,
       modeFirstStake: 0,
@@ -8762,6 +8797,7 @@ export default function App() {
           onUnlockMarkets={handleUnlockMarkets}
           accumulatedLoss={accumulatedLoss}
           currentMode={currentMode}
+          maxModeReached={maxModeReached}
           defaultModeLossCount={defaultModeLossCount}
           inModeLossCount={inModeLossCount}
           modeFirstStake={modeFirstStake}

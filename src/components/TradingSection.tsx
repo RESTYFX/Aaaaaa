@@ -52,6 +52,7 @@ interface TradingSectionProps {
   accumulatedLoss?: number;
   currentPhase?: number;
   currentMode?: number;
+  maxModeReached?: number;
   defaultModeLossCount?: number;
   inModeLossCount?: number;
   modeFirstStake?: number;
@@ -101,6 +102,7 @@ export const TradingSection: React.FC<TradingSectionProps> = ({
   onUnlockMarkets,
   accumulatedLoss = 0,
   currentMode = 0,
+  maxModeReached = 0,
   defaultModeLossCount = 0,
   inModeLossCount = 0,
   modeFirstStake = 0,
@@ -508,6 +510,7 @@ export const TradingSection: React.FC<TradingSectionProps> = ({
           params={params}
           onUpdateParams={onUpdateParams}
           currentMode={currentMode}
+          maxModeReached={maxModeReached}
           inModeLossCount={inModeLossCount}
           modeFirstStake={modeFirstStake}
           modeAccumulatedLoss={modeAccumulatedLoss}
@@ -585,7 +588,7 @@ export const TradingSection: React.FC<TradingSectionProps> = ({
               </span>
             ) : params.inInterModeEnabled ? (
               <span className="font-mono font-bold px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
-                In/Inter-Mode ({currentMode > 0 ? `Mode ${currentMode}` : 'Default'})
+                In-Mode / Steps ({currentMode > 0 ? `Mode ${currentMode}` : 'Default'})
               </span>
             ) : params.autoMartingaleEnabled ? (
               <span className="font-mono font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">

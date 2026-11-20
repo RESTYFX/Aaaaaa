@@ -6,13 +6,14 @@ import {
   Layers,
   RotateCcw,
 } from 'lucide-react';
-import { TradeParameters, InInterModeConfig, DEFAULT_IN_INTER_MODES } from '../types';
+import { TradeParameters, InInterModeConfig, DEFAULT_IN_INTER_MODES, normalizeModesConfig } from '../types';
 import { autoRecoveryStorage } from '../services/autoRecoveryStorage';
 
 interface InInterModeMartingaleSectionProps {
   params: TradeParameters;
   onUpdateParams: (newParams: Partial<TradeParameters>) => void;
   currentMode?: number;
+  maxModeReached?: number;
   inModeLossCount?: number;
   modeFirstStake?: number;
   modeAccumulatedLoss?: number;
@@ -24,6 +25,7 @@ export const InInterModeMartingaleSection: React.FC<InInterModeMartingaleSection
   params,
   onUpdateParams,
   currentMode = 0,
+  maxModeReached = 0,
   inModeLossCount = 0,
   modeFirstStake = 0,
   modeAccumulatedLoss = 0,
@@ -43,17 +45,20 @@ export const InInterModeMartingaleSection: React.FC<InInterModeMartingaleSection
 
   const isEnabled = Boolean(params.inInterModeEnabled);
   const consecutivesToSwitch = params.consecutivesToSwitchMode ?? 3;
-  const modes: InInterModeConfig[] =
-    Array.isArray(params.modesConfig) && params.modesConfig.length === 10
-      ? params.modesConfig
-      : DEFAULT_IN_INTER_MODES;
+  const modes: InInterModeConfig[] = normalizeModesConfig(params.modesConfig);
 
-  const handleUpdateMode = (index: number, field: keyof InInterModeConfig, value: number) => {
+  const handleUpdateMode = (index: number, field: 'inModeMartingale' | 'steps', value: number) => {
     const updated = modes.map((m, idx) => {
       if (idx === index) {
+        if (field === 'steps') {
+          return {
+            ...m,
+            steps: Math.max(1, Math.min(100, Math.round(value))),
+          };
+        }
         return {
           ...m,
-          [field]: Math.max(1.0, Math.min(10, Number(value.toFixed(2)))),
+          inModeMartingale: Math.max(1.0, Math.min(10, Number(value.toFixed(2)))),
         };
       }
       return m;
@@ -84,13 +89,28 @@ export const InInterModeMartingaleSection: React.FC<InInterModeMartingaleSection
         <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-wrap">
           <GitFork className={`w-3.5 h-3.5 shrink-0 ${isEnabled ? 'text-cyan-400' : 'text-zinc-500'}`} />
           <span className="text-[11px] sm:text-xs font-semibold text-zinc-200 truncate">
-            In-Mode &amp; Inter-Mode Martingale
+            In-Mode &amp; Steps Martingale
           </span>
-          {isEnabled && currentMode > 0 && (
-            <span className="text-[9px] font-mono font-bold text-cyan-300 bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/30 shrink-0">
-              Mode {currentMode} ({inModeLossCount}/{consecutivesToSwitch}) • 1st: ${modeFirstStake.toFixed(2)} • Rem: ${modeAccumulatedLoss.toFixed(2)}
-              {currentCalculatedStake > 0 ? ` • Next: $${currentCalculatedStake.toFixed(2)}` : ''}
-            </span>
+          {isEnabled && (
+            <>
+              <span className="text-[9px] font-mono font-bold text-cyan-300 bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/30 shrink-0">
+                {currentMode > 0 ? (
+                  <>
+                    Current: Mode {currentMode} ({inModeLossCount}/{consecutivesToSwitch}) • 1st: ${modeFirstStake.toFixed(2)} • Rem: ${modeAccumulatedLoss.toFixed(2)}
+                    {currentCalculatedStake > 0 ? ` • Next: $${currentCalculatedStake.toFixed(2)}` : ''}
+                  </>
+                ) : (
+                  'Current: Default'
+                )}
+              </span>
+              <span
+                id="in-inter-max-mode-badge"
+                className="text-[9px] font-mono font-bold text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/35 shrink-0"
+                title="Highest mode reached so far in In-Mode & Steps Martingale"
+              >
+                Max Mode: {Math.max(maxModeReached, currentMode) > 0 ? `Mode ${Math.max(maxModeReached, currentMode)}` : '0'}
+              </span>
+            </>
           )}
         </div>
 
@@ -192,7 +212,7 @@ export const InInterModeMartingaleSection: React.FC<InInterModeMartingaleSection
           {/* Header for 10 Modes */}
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-zinc-400">
-              10 Mode Multipliers
+              10 Modes (In-Mode &amp; Steps)
             </span>
             <button
               type="button"
@@ -210,7 +230,7 @@ export const InInterModeMartingaleSection: React.FC<InInterModeMartingaleSection
               const modeNumber = idx + 1;
               const isCurrentMode = currentMode === modeNumber;
               const inKey = `${idx}-in`;
-              const interKey = `${idx}-inter`;
+              const stepsKey = `${idx}-steps`;
 
               return (
                 <div
@@ -277,45 +297,42 @@ export const InInterModeMartingaleSection: React.FC<InInterModeMartingaleSection
                     </div>
 
                     <div>
-                      <span className="text-[10px] text-cyan-300 block mb-0.5">Inter-Mode:</span>
+                      <span className="text-[10px] text-cyan-300 block mb-0.5">Steps:</span>
                       <div className="relative">
                         <input
-                          id={`inter-mode-input-${modeNumber}`}
+                          id={`steps-mode-input-${modeNumber}`}
                           type="number"
-                          step="0.05"
-                          min="1.0"
-                          max="10"
-                          value={interKey in modeDrafts ? modeDrafts[interKey] : String(modeConfig.interModeMartingale)}
+                          step="1"
+                          min="1"
+                          max="100"
+                          value={stepsKey in modeDrafts ? modeDrafts[stepsKey] : String(modeConfig.steps)}
                           onChange={(e) => {
                             const raw = e.target.value;
-                            setModeDrafts((prev) => ({ ...prev, [interKey]: raw }));
-                            const parsed = parseFloat(raw);
-                            if (!isNaN(parsed) && parsed >= 1.0 && parsed <= 10) {
-                              handleUpdateMode(idx, 'interModeMartingale', parsed);
+                            setModeDrafts((prev) => ({ ...prev, [stepsKey]: raw }));
+                            const parsed = parseInt(raw, 10);
+                            if (!isNaN(parsed) && parsed >= 1 && parsed <= 100) {
+                              handleUpdateMode(idx, 'steps', parsed);
                             }
                           }}
                           onBlur={() => {
-                            const raw = modeDrafts[interKey];
+                            const raw = modeDrafts[stepsKey];
                             if (raw !== undefined) {
-                              const parsed = parseFloat(raw);
-                              const fallback = DEFAULT_IN_INTER_MODES[idx]?.interModeMartingale ?? 1.5;
+                              const parsed = parseInt(raw, 10);
+                              const fallback = DEFAULT_IN_INTER_MODES[idx]?.steps ?? 5;
                               handleUpdateMode(
                                 idx,
-                                'interModeMartingale',
+                                'steps',
                                 !isNaN(parsed) ? parsed : fallback
                               );
                               setModeDrafts((prev) => {
                                 const next = { ...prev };
-                                delete next[interKey];
+                                delete next[stepsKey];
                                 return next;
                               });
                             }
                           }}
-                          className="w-full bg-zinc-900 border border-zinc-700/80 rounded px-1.5 py-0.5 pr-4 text-[11px] font-mono font-bold text-cyan-200 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                          className="w-full bg-zinc-900 border border-zinc-700/80 rounded px-1.5 py-0.5 text-[11px] font-mono font-bold text-cyan-200 focus:outline-none focus:ring-1 focus:ring-cyan-500"
                         />
-                        <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-500 text-[9px] font-mono">
-                          x
-                        </span>
                       </div>
                     </div>
                   </div>

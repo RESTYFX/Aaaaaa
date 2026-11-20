@@ -78,21 +78,42 @@ export interface BalanceStats {
 
 export interface InInterModeConfig {
   inModeMartingale: number;
-  interModeMartingale: number;
+  steps: number; // Number of winning trades to recover accumulated loss at Deriv payout %
+  interModeMartingale?: number; // Legacy optional field kept for backward compatibility
 }
 
 export const DEFAULT_IN_INTER_MODES: InInterModeConfig[] = [
-  { inModeMartingale: 1.4, interModeMartingale: 1.5 }, // Mode 1
-  { inModeMartingale: 1.6, interModeMartingale: 1.7 }, // Mode 2
-  { inModeMartingale: 1.6, interModeMartingale: 1.7 }, // Mode 3
-  { inModeMartingale: 1.7, interModeMartingale: 1.8 }, // Mode 4
-  { inModeMartingale: 1.7, interModeMartingale: 1.8 }, // Mode 5
-  { inModeMartingale: 1.8, interModeMartingale: 1.9 }, // Mode 6
-  { inModeMartingale: 1.8, interModeMartingale: 1.9 }, // Mode 7
-  { inModeMartingale: 1.9, interModeMartingale: 2.0 }, // Mode 8
-  { inModeMartingale: 1.9, interModeMartingale: 2.0 }, // Mode 9
-  { inModeMartingale: 2.0, interModeMartingale: 2.1 }, // Mode 10
+  { inModeMartingale: 1.4, steps: 5 }, // Mode 1
+  { inModeMartingale: 1.6, steps: 5 }, // Mode 2
+  { inModeMartingale: 1.6, steps: 5 }, // Mode 3
+  { inModeMartingale: 1.7, steps: 4 }, // Mode 4
+  { inModeMartingale: 1.7, steps: 4 }, // Mode 5
+  { inModeMartingale: 1.8, steps: 4 }, // Mode 6
+  { inModeMartingale: 1.8, steps: 3 }, // Mode 7
+  { inModeMartingale: 1.9, steps: 3 }, // Mode 8
+  { inModeMartingale: 1.9, steps: 3 }, // Mode 9
+  { inModeMartingale: 2.0, steps: 2 }, // Mode 10
 ];
+
+export function normalizeModesConfig(raw?: unknown): InInterModeConfig[] {
+  if (!Array.isArray(raw) || raw.length !== 10) {
+    return DEFAULT_IN_INTER_MODES.map((m) => ({ ...m }));
+  }
+  return raw.map((item, idx) => {
+    const fallback = DEFAULT_IN_INTER_MODES[idx];
+    const obj = (item && typeof item === 'object' ? item : {}) as Partial<InInterModeConfig>;
+    const inMode = typeof obj.inModeMartingale === 'number' && !isNaN(obj.inModeMartingale) && obj.inModeMartingale >= 1.0
+      ? Math.min(10, Number(obj.inModeMartingale.toFixed(2)))
+      : fallback.inModeMartingale;
+    const steps = typeof obj.steps === 'number' && !isNaN(obj.steps) && obj.steps >= 1
+      ? Math.min(100, Math.round(obj.steps))
+      : fallback.steps;
+    return {
+      inModeMartingale: inMode,
+      steps,
+    };
+  });
+}
 
 export interface TradeParameters {
   stake: number;

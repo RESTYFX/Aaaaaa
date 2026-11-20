@@ -1,4 +1,4 @@
-import { CorrectedLossItem, TradeParameters, TradeRecord, DEFAULT_IN_INTER_MODES, MarketMartingaleState } from '../types';
+import { CorrectedLossItem, TradeParameters, TradeRecord, normalizeModesConfig, MarketMartingaleState } from '../types';
 
 const STORAGE_KEY_SESSION = 'deriv_active_session';
 const STORAGE_KEY_PARAMS = 'deriv_persisted_trading_params';
@@ -117,6 +117,7 @@ export interface PersistedMartingaleState {
   accumulatedLoss?: number;
   currentPhase?: number;
   currentMode?: number;
+  maxModeReached?: number;
   defaultModeLossCount?: number;
   inModeLossCount?: number;
   modeFirstStake?: number;
@@ -212,9 +213,7 @@ export const autoRecoveryStorage = {
           maxMultiplier: parsed.maxMultiplier ?? 5,
           inInterModeEnabled: parsed.inInterModeEnabled ?? false,
           consecutivesToSwitchMode: parsed.consecutivesToSwitchMode ?? 3,
-          modesConfig: Array.isArray(parsed.modesConfig) && parsed.modesConfig.length === 10
-            ? parsed.modesConfig
-            : DEFAULT_IN_INTER_MODES,
+          modesConfig: normalizeModesConfig(parsed.modesConfig),
           virtualHookEnabled: parsed.virtualHookEnabled ?? false,
           virtualHookLossThreshold: parsed.virtualHookLossThreshold ?? 1,
           virtualHookVirtualStake: parsed.virtualHookVirtualStake ?? (parsed.stake ?? 0.35),
